@@ -1,9 +1,11 @@
 import os
 import sys
 from dotenv import load_dotenv
-from langchain_openai import OpenAI
+from langchain_openai import OpenAI, OpenAIEmbeddings
 from bs4 import BeautifulSoup
+from langchain_text_splitters import CharacterTextSplitter
 import requests
+from langchain_community.vectorstores import FAISS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -40,9 +42,15 @@ def gather_information(topic):
     except requests.RequestException as e:
         print(f"Error fetching information for topic '{topic}': {str(e)}")
         return ""
+    
+# Truncate text to manageable size  
+def truncate_text(text, max_tokens=2000): 
+    """ Truncate text to approximately max_tokens. """ 
+    words = text.split() 
+    return ' '.join(words[:max_tokens])
 
 # Analyse information
-def analyze_information(text):
+def analyze_information(info):
     """
     Analyze and summarize text using OpenAI.
     
@@ -52,26 +60,56 @@ def analyze_information(text):
     Returns:
         A summary and analysis of the text
     """
-    if not text:
+    if not info:
         return "No text to analyze."
     
     try:
         # Create a prompt for summarization and analysis
         prompt = f"""Please provide a comprehensive summary and analysis of the following text:
 
-{text[:4000]}  # Limit text length to avoid token limits
+{info[:4000]}  # Limit text length to avoid token limits
 
 Provide:
 1. A concise summary (2-3 sentences)
 2. Key points and main topics
 3. Any interesting insights
 """
-        
-        summary = openai_model.invoke(prompt)
-        return summary
+        llm = OpenAI(temperature=0.7, max_tokens=500)  # Limit the response tokens 
+        truncated_info = truncate_text(info, max_tokens=1500)  # Further reduce input tokens 
+        prompt = f"Summarize key points from this text:\n\n{truncated_info}\n\nKey points:" 
+        response = llm.invoke(prompt)
+        return response
+       # summary = openai_model.invoke(prompt)
+       #  return summary
     except Exception as e:
         print(f"Error analyzing information: {str(e)}")
         return "Error occurred during analysis."
+
+# Generate concise summary
+def generate_summary(analysis): 
+    llm = OpenAI(temperature=0.7) 
+    prompt = f""" 
+    Based on the following analysis, generate a concise summary: 
+    {analysis} 
+    Concise summary: 
+    """ 
+    summary = llm.invoke(prompt) 
+    return summary
+
+# Create knowledge base
+def create_knowledge_base(text): 
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0) 
+    texts = text_splitter.split_text(text) 
+    embeddings = OpenAIEmbeddings() 
+    knowledge_base = FAISS.from_texts(texts, embeddings) 
+    return knowledge_base 
+
+# Query knowledge base
+def query_knowledge_base(query, kb): 
+    docs = kb.similarity_search(query, k=1) 
+    return docs[0].page_content 
+
+
 
 # Running the research Assistant
 if __name__ == "__main__":
@@ -97,6 +135,13 @@ if __name__ == "__main__":
         print("ANALYSIS RESULTS:")
         print("="*50)
         print(analysis)
+
+        summary = generate_summary(analysis) 
+        print(f"Summary: {summary}") 
+        kb = create_knowledge_base(info) 
+        query = "What are the main applications of AI?" 
+        result = query_knowledge_base(query, kb) 
+        print(f"Query result: {result}")
         
         # Write results to file
         output_filename = f"{topic}_analysis.txt"
@@ -108,6 +153,13 @@ if __name__ == "__main__":
                 f.write("ANALYSIS RESULTS:\n")
                 f.write("="*50 + "\n\n")
                 f.write(str(analysis))
+                f.write(f"Summarized {len(analysis)} characters of text.\n\n")
+                f.write("SUMMARY RESULTS:\n")
+                f.write("="*50 + "\n\n")
+                f.write(str(summary))
+                f.write("Query RESULTS:\n")
+                f.write("="*50 + "\n\n")
+                f.write(str(result))
             print(f"\n✓ Results saved to: {output_filename}")
         except Exception as e:
             print(f"\nError saving to file: {str(e)}")
